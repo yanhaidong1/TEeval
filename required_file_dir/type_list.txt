@@ -1,0 +1,23 @@
+Total reference TE number
+Detected reference TE number
+Total detected TE number
+TP_num
+TP_average_accuracy
+TP_median_accuracy
+TP_num_over_0.8_accuracy
+TP_num_over_0.5_accuracy
+FP_num
+TN_num
+FN_num
+SE
+PR
+SP
+AC
+Start and End
+Start
+Totally within
+End
+Overlaps start
+Overlaps end
+NA
+Totally over

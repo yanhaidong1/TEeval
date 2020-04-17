@@ -1,0 +1,594 @@
+#!/usr/bin/env python
+
+##script updation_3.12: add AP domain for the LTR analysis
+##script updation: 3.12, remove the id.seq 1-6 and id.out 1-6 to make sure that the elder one will not disturb the current detection
+
+
+##this script is to identify if the RT is complete or not, and what the type of this LTR
+from Bio.SeqUtils import six_frame_translations
+import re
+from Bio import SeqIO
+import subprocess
+import pandas as pd
+
+####################
+##set the input file
+####################
+##the input file is the fasta for each ltr
+##this input file is from the previous step 1
+
+##############################################################################
+##Step 1: Translate each reading frame and identify the possible reading frame
+##############################################################################
+
+##intial a translation function
+##only translate the first three reading frame because it should keep consensus with the PBS binding sites
+def translate (te_seq):
+    ##initial a dictionary to store the protein sequence for the six reading frame
+    pro_seq_dic = {}
+    ##Runs a six-frame translation for each gene in the string ts2seq
+    f6 = six_frame_translations(te_seq)
+    ##Splits each gene in the above mentioned translation with a new line
+    f6tmp = str(f6).split('\n')
+    num_m = re.match('(.+)5$', str(len(f6tmp)))
+    num_cnt = num_m.group(1)
+    ####################################################################
+    ##the following is the first three reading frame of this te sequence
+    ##get the location information of sequences
+    l1 = 5
+    l2 = 6
+    l3 = 7
+    ##Initializes a hand full of lists we will later fill with the genomic data to analyze
+    list1 = []
+    list2 = []
+    list3 = []
+    ##Sets range that the genomic data we are looking at can be based on the 6-frame translation
+    for i in range(0, (int(num_cnt))):
+        l1 = 5 + i * 10
+        list1.append(l1)
+        l2 = 6 + i * 10
+        list2.append(l2)
+        l3 = 7 + i * 10
+        list3.append(l3)
+    ##extract the sequence information from the location informationa
+    ##the following is the first three list
+    allist_f = [list1, list2, list3]
+    ##create a string to be the index for the key of the dictionary
+    fr_count = 0
+    for eachlist in allist_f:
+        fr_count = fr_count + 1
+        ##extrac the sequence information
+        ##For each gene, adds the word 'list' for each additional gene after the start + end codon
+        framenm = 'f' + str(fr_count)
+        ##initial a list to store all the protein sequences
+        f6aa = []
+        # Setting the frame protein for each translation
+        for i in eachlist:
+            pseq = f6tmp[i]
+            f6aa.append(pseq)
+        ##combination of the sequence
+        comptlist = ' '.join(f6aa)
+        ##split the '' between each aa and then replace it with ,
+        comptstr = comptlist.replace(' ', '')
+        ##store sequence information on the dictionary
+        pro_seq_dic[framenm] = comptstr
+
+    return (pro_seq_dic)
+
+##initial a function to identify the domain for the six reading frame
+##define a function to identify te domain and generate the domain table
+##import the pro_seq_dic generated from the translate function
+def iden_domain_six_rdframe (pro_seq_dic,seqid,hmmscan_exe,ltr_dir):
+
+    ##initial a dictionary to store the results
+    te_domain_six_rdframe_dic = {}
+
+    ##initial a dictionary to store the name of six reading frame
+    six_frame_nm_dic = {}
+    for eachframe in pro_seq_dic:
+        te_frame_nm = seqid + '_' + eachframe
+        te_opt_nm = eachframe + '.seq'
+        te_pro_seq = open(ltr_dir + '/' + te_opt_nm, 'w')
+        ##this will generate each reading frame file
+        te_pro_seq.write('>' + te_frame_nm + '\n' + str(pro_seq_dic[eachframe]))
+        te_pro_seq.close()  ##it is important to close the te_pro_seq file
+        six_frame_nm_dic[eachframe] = 1
+
+    ##use the hmm to detect domain information for each frame
+    for eachnm in six_frame_nm_dic:
+        tefm_seq = eachnm + '.seq'
+        opt_tefm = eachnm + '.out'
+        cmd = hmmscan_exe + ' ' + ltr_dir + '/minifam ' + ltr_dir + '/' + tefm_seq + ' > ' + ltr_dir + '/' + opt_tefm
+        subprocess.call(cmd, shell=True)
+
+        ##open the output file from hmmscan
+        domain_te_file = open(ltr_dir + '/' + opt_tefm, 'r')
+        for line in domain_te_file:
+            line.strip()
+            if re.match('.+\d+\s+PF\d+_.+', line):
+                mt = re.match('(.+PF\d+_[A-Z]+).+', line)
+                new_line = mt.group(1)
+                te_line = seqid + '_' + eachnm + '\t' + new_line
+                te_domain_six_rdframe_dic[te_line] = 1
+
+    return (te_domain_six_rdframe_dic)
+
+#############################################################
+##the following funcitons is to filter the best reading frame
+##define a function to store the te name and its domain number information in the dictionary
+def cal_dm_num (te_nm,domain_dtf): ##note: the domain_dtf is generated by the next function.
+    ##creat a dictionary to store number information for each domain
+    domain_num_dic = {}
+    ##collect the target te
+
+    #te_dt = domain_dtf
+    te_dt = domain_dtf.loc[domain_dtf[domain_dtf.columns[0]] == te_nm]
+    print('the te_dt is following')
+    print(te_dt)
+    ##filter the different domain name for the ltr
+    te_rt_dt = te_dt[te_dt[te_dt.columns[9]].str.contains('RT', flags=re.I, na=False)]
+    te_in_dt = te_dt[te_dt[te_dt.columns[9]].str.contains('IN', flags=re.I, na=False)]
+    te_gag_dt = te_dt[te_dt[te_dt.columns[9]].str.contains('GAG', flags=re.I, na=False)]
+    te_rh_dt = te_dt[te_dt[te_dt.columns[9]].str.contains('RH', flags=re.I, na=False)]
+
+    ##update:3.12 add 'AP'
+    te_ap_dt = te_dt[te_dt[te_dt.columns[9]].str.contains('AP', flags=re.I, na=False)]
+
+    ##update:3.12 add 'AP'
+    domain_num_dic[te_nm] = {'RT_ltr': len(te_rt_dt), 'IN_ltr': len(te_in_dt), 'GAG_ltr': len(te_gag_dt),
+                             'RH_ltr': len(te_rh_dt), 'AP_ltr': len(te_ap_dt)}
+
+    return domain_num_dic
+
+##intial a function to compare each reading frame and choose the best one
+##import the pro_seq_dic from the translate function
+def compare_rdframe (te_domain_six_rdframe_dic,ltr_dir):
+    ##the import dic is the te_domain_six_rdframe_dic from the previous iden_domain_six_rdframe
+
+    ##initial a best te empty string
+    #max_te_nm = ''
+
+    #########################################################################
+    ##Step 1: write out because the next step will use the output of this dic
+    with open(ltr_dir + '/opt_temp_six_rdframe_domain_hmm.tb', 'w+') as opt_te_ltr:
+        for eachline in te_domain_six_rdframe_dic:
+            opt_te_ltr.write(eachline + '\n')
+    ##read the temp_domain_hmm table
+    domain_df = pd.read_table(ltr_dir + '/opt_temp_six_rdframe_domain_hmm.tb', header=None, delimiter=r"\s+")
+    te_nm = domain_df[domain_df.columns[0]].unique() ##contain information for six reading frame name
+    ##the df dataframe only store te domain information for 0 or 1 that are used for filter the longest reading frame
+
+    ##update:3.12 add 'AP'
+    df = pd.DataFrame(index=te_nm, columns=['RT_LTR', 'IN_LTR', 'GAG_LTR', 'RH_LTR', 'AP_LTR'])
+    ##transfer the domain_df to the domain_dtf
+    domain_dtf = pd.DataFrame(domain_df)
+
+
+    ################################################
+    ##Step 2: create the table of domain information
+    for eachte in te_nm:
+        ##call the domain dictionary from function cal_dm_num
+        te_domain_num_dic = cal_dm_num(eachte,domain_dtf)
+        # print(te_domain_num_dic[eachte]['RT_ltr'])
+        ##save the number of domain to the table
+        ##for ltr
+        if te_domain_num_dic[eachte]['RT_ltr'] != 0:
+            df.loc[eachte, 'RT_LTR'] = 1
+        else:
+            df.loc[eachte, 'RT_LTR'] = 0
+        if te_domain_num_dic[eachte]['IN_ltr'] != 0:
+            df.loc[eachte, 'IN_LTR'] = 1
+        else:
+            df.loc[eachte, 'IN_LTR'] = 0
+        if te_domain_num_dic[eachte]['GAG_ltr'] != 0:
+            df.loc[eachte, 'GAG_LTR'] = 1
+        else:
+            df.loc[eachte, 'GAG_LTR'] = 0
+        if te_domain_num_dic[eachte]['RH_ltr'] != 0:
+            df.loc[eachte, 'RH_LTR'] = 1
+        else:
+            df.loc[eachte, 'RH_LTR'] = 0
+
+        ##update:3.12 add 'AP'
+        if te_domain_num_dic[eachte]['AP_ltr'] != 0:
+            df.loc[eachte, 'AP_LTR'] = 1
+        else:
+            df.loc[eachte, 'AP_LTR'] = 0
+
+
+    ###############################################################################
+    ##step 3: analyze each te with all reading frames and get the filtered te table
+    ##create an empty dataframe to store the filtered information
+    #df_ft = pd.DataFrame(index=set(te_nm_list), columns=['RT_LTR', 'IN_LTR', 'GAG_LTR', 'RH_LTR'])
+
+    ##because df only contains six dataframe so do not need to create a new dt to store only dt for one dataframe
+
+    ##update:3.12 add 'AP'
+    df['ltr_sum'] = df[['RT_LTR', 'IN_LTR', 'RH_LTR', 'AP_LTR']].sum(axis=1)
+
+    print ('the df that has been calculated the gene number is following')
+    print (df)
+
+    ##only select the best te
+    te_ltr_rt_dt = df[df['RT_LTR'] != 0]
+    if (len(te_ltr_rt_dt) != 0):
+        max_te_nm = te_ltr_rt_dt['ltr_sum'].idxmax()
+    else:
+        max_te_nm = df['ltr_sum'].idxmax()
+
+    return(max_te_nm)
+
+
+#################################################
+##Step 2: Identify the domain pattern for each te
+#################################################
+##the step 1 we obtain the best te, and this step we will go to each the best te seq to remove the covered te
+##initial a function to obtain the seq name of max te
+def iden_max_seq (max_te_nm):
+    mt = re.match('.+_(f\d)',max_te_nm)
+    rfnm = mt.group(1)
+    seq_out = rfnm + '.out'
+    return (seq_out)
+
+##initial a function collect the output of the hmm
+def collect_domain (seq_out_file):
+    ##return the all information
+    domain_location_dic = {}
+
+    ##store the domain nm and its number information
+    domain_nm_num_dic = {}
+
+    with open(seq_out_file,'r') as ipt_seq:
+        for eachline in ipt_seq:
+            eachline.strip()
+            if re.match('.+\d+\s+PF\d+_.+', eachline):
+                col = eachline.strip().split()
+                number = col[7]
+                #print(number)
+                domain_nm = col[8]
+                #print(domain_nm)
+                domain_nm_num_dic[domain_nm] = number
+
+    ##store the lines to one dic
+    seq_out_line_list = []
+    with open(seq_out_file,'r') as ipt_seq:
+        for eachline in ipt_seq:
+            eachline = eachline.strip('\n')
+            seq_out_line_list.append(eachline)
+
+    ##initial a dic to store the domain location information
+    #domain_location_dic = {}
+    for eachline in seq_out_line_list:
+        if '>>' in eachline:
+            col = eachline.strip().split()
+            te_domain_nm = col[1]
+            te_domain_num = domain_nm_num_dic[te_domain_nm]
+            ##get the line number
+            line_th = seq_out_line_list.index(eachline)
+            ##start loc number
+            start = line_th + 3
+            end = start + int(te_domain_num)
+
+            ##extract the target information
+            for i in range(start,end):
+                tar_line = te_domain_nm + '\t' + seq_out_line_list[i]
+                domain_location_dic[tar_line] = 1
+
+    return (domain_location_dic)
+
+##initial a function to remove the coverage of TE domain
+def store_domain_info (domain_location_dic,ltr_dir):
+    ##import file is the domain_nm_num_dic in the collect_domain function
+    ##initial a domain location dic to store the domain information
+    ##use the domain name as the last column in this dic
+    domain_all_dic = {}
+
+    new_domain_location_dic = {}
+
+    #dm_nm_dic = {}
+
+    for eachline in domain_location_dic:
+        col = eachline.strip().split()
+        ##filter out low evalue
+        if float(col[5]) < 0.05 and float(col[6]) < 0.05:
+            ##extract the domain name
+            mt = re.match('(.+)_(.+)', col[0])
+            dm_nm = mt.group(2)
+
+            new_line = eachline + '\t' + dm_nm
+            print(new_line)
+            new_domain_location_dic[new_line] = 1
+
+    ##write out the results as the temp file that will be as the input file for the next function which will use the pandas
+    with open(ltr_dir + '/opt_temp_seq_domain_loc.txt', 'w+') as opt_dm_loc:
+        for eachline in new_domain_location_dic:
+            opt_dm_loc.write(eachline + '\n')
+
+    with open(ltr_dir + '/opt_temp_seq_domain_loc.txt') as ipt_test:
+        first = ipt_test.read(1)
+        if not first:
+            print('this file is empty')
+        else:
+            print('this file is not empty')
+            ltr_fl = pd.read_table(ltr_dir + '/opt_temp_seq_domain_loc.txt', header=None, delimiter=r"\s+")
+            ##sort chr and start region
+            ltr_fl.columns = ['domain_name','1','2','3','4','5','6','7','8','9','start','11','12','13','14','15','16','type']
+            ltr_sort_fl = ltr_fl.sort_values(by=['type','start'])
+            ltr_sort_fl.to_csv(ltr_dir + '/opt_temp_seq_domain_loc_sort.csv', sep='\t')
+
+    ##store the type information
+    ##this step is to conduct a loop for analyzing each domain type
+    domain_dic = {}
+    with open(ltr_dir + '/opt_temp_seq_domain_loc_sort.csv', 'r') as ipt_tb:
+        for eachline in ipt_tb:
+            if not re.match('.*domain_name.+', eachline):
+                eachline = eachline.strip('\n')
+                col = eachline.split('\t')
+                # print(col[1])
+                domain_dic[col[-1]] = 1
+
+    ##this step is to detect the last domain for the further analysis
+    ##calculate te number in each chromosome
+    domain_te_num_dic = {}
+    with open(ltr_dir + '/opt_temp_seq_domain_loc_sort.csv', 'r') as ipt_tb:
+        for eachline in ipt_tb:
+            if not re.match('.*domain_name.+', eachline):
+                eachline = eachline.strip('\n')
+                col = eachline.split('\t')
+                type_nm = col[-1]
+                if type_nm in domain_te_num_dic.keys():
+                    domain_te_num_dic[type_nm] = domain_te_num_dic[type_nm] + 1
+                else:
+                    domain_te_num_dic[type_nm] = 1
+
+    ##this step is to connect the domain information in the dictionary
+    ##initial a dictionary to store all the information of domain, and use the domain type name as the key
+    ##this domain_all_dic has been initialled in the begin of this function
+    ##initial a dictionary to store the id number
+    type_id_dic = {}
+    for eachtype in domain_dic:
+        ##if the chr change to the next one, it should to initial an empty te_dic and an empty dic_list
+        te_dic = {}
+        dic_list = []
+        with open(ltr_dir + '/opt_temp_seq_domain_loc_sort.csv', 'r') as ipt_tb:
+            for eachline in ipt_tb:
+                if not re.match('.*domain_name.+', eachline):
+
+                    eachline = eachline.strip('\n')
+
+                    col = eachline.split('\t')
+                    type_nm = col[-1]
+
+                    if type_nm == eachtype:
+                        if eachtype in type_id_dic.keys():
+                            type_id_dic[eachtype] = type_id_dic[eachtype] + 1
+                        else:
+                            type_id_dic[eachtype] = 1
+
+                        id = str(type_id_dic[eachtype])
+                        type_nm = col[1]
+                        type_begin = col[11]
+                        type_end = col[12]
+
+                        if str(domain_te_num_dic[eachtype]) == str(1):
+                            te_dic[id] = {'Type_nm': col[1], 'Type_begin': type_begin, 'Type_end': type_end}
+                            dic_list.append(te_dic)
+                        else:
+                            if id == str(1):
+                                te_dic[id] = {'Type_nm': col[1], 'Type_begin': type_begin, 'Type_end': type_end}
+                            if id > str(1):
+                                if type_begin <= te_dic[str(int(id) - 1)]['Type_end']:
+                                    te_dic[id] = {'Type_nm': col[1], 'Type_begin': type_begin, 'Type_end': type_end}
+                                else:
+                                    dic_list.append(te_dic)
+                                    te_dic = {}
+                                    te_dic[id] = {'Type_nm': col[1], 'Type_begin': type_begin, 'Type_end': type_end}
+
+                                if id == str(domain_te_num_dic[eachtype]):
+                                    dic_list.append(te_dic)
+
+        domain_all_dic[eachtype] = dic_list  ##this dictionary contain the key which is the chr name and value which is the dic list
+
+    return(domain_all_dic)
+
+
+##initial a function to transfer data and store in another dictionary
+def transfer (id_order,te_comp_dic,te_dic):
+
+    te_comp_dic[id_order] = {'Type_nm': te_dic[id_order]['Type_nm'], 'Type_begin': te_dic[id_order]['Type_begin'], 'Type_end': te_dic[id_order]['Type_end']}
+
+##initial a function to filter te covered by the same te
+##the argument is the te which store all the information
+##the domain_all_dic is the dic from the previou function store_domain_info
+def filter_te (domain_all_dic,ltr_dir):
+
+    ##initial a string to store the the domain pattern
+    ##this function will return the domain string
+    domain_str = ''
+
+    ##initial a dic to store the filtered te
+    ##there are some problems to store the te line because the order is wrong so we use the list to store
+    #te_line_list = []
+    te_line_dic = {}
+
+    ##te_all_dic's key is the chromosome dictionary of each store a list
+    ##each list sotre multiple dictionary. Some dic contains one key and some dic contains multiple keys
+    for eachchr_dic in domain_all_dic:
+        dic_list = domain_all_dic[eachchr_dic]
+
+
+        for tar_dic in dic_list: ##each dic store one key or multiple keys
+            #tar_dic = te_all_dic[eachchr_dic][eachdic]  ##name a dic to a other name to decrease the length of dic
+
+
+            if len(tar_dic) == 1:
+                for eachid in tar_dic:  ##call the each key in this tar_dic
+                    tar_te_line = tar_dic[eachid]['Type_nm'] + '\t' + tar_dic[eachid]['Type_begin'] + '\t' + tar_dic[eachid]['Type_end']
+
+                    #te_line_list.append(tar_te_line)
+                    te_line_dic[tar_te_line] = 1
+
+
+            ##if the length of tar_dic is not 1
+            if len(tar_dic) > 1:
+                ##create a another te_dic to store the comparision results from this te_dic
+                te_comp_dic = {}
+
+                for eachid in tar_dic:
+
+                    ######################################
+                    ##Analyze the first two keys in te_dic
+                    if eachid != list(tar_dic)[0]:
+                        ##extract the length of eachid
+                        ##previous length
+                        #pre_len = int(tar_dic[str(int(eachid)-1)]['end']) - int(tar_dic[str(int(eachid)-1)]['begin'])
+                        ##current length
+                        cur_len = int(tar_dic[eachid]['Type_end']) - int(tar_dic[eachid]['Type_begin'])
+
+                        if eachid == list(tar_dic)[1]:
+
+                            pre_len = 0
+                            if str(int(eachid) - 1) in tar_dic.keys():
+                            ##previous length
+                                pre_len = int(tar_dic[str(int(eachid) - 1)]['Type_end']) - int(tar_dic[str(int(eachid) - 1)]['Type_begin'])
+
+                            #cur_len = int(tar_dic[eachid]['end']) - int(tar_dic[eachid]['begin'])
+
+                            ##if the first is longer than the second one
+                            if pre_len >= cur_len:
+                                ##import the first id to the te_comp_dic
+                                transfer(str(int(eachid)-1),te_comp_dic,tar_dic)
+                            ##if the second is longer than the first one
+                            else:
+                                ##import the second id to the te_comp_dic
+                                transfer(eachid, te_comp_dic, tar_dic)
+
+                        #################################
+                        ##Analyze the rest keys in te_dic
+                        ##the current of dic should compare with the te in the compare dictionary
+                        else:
+                            com_len = int(te_comp_dic[list(te_comp_dic)[-1]]['Type_end']) -  int(te_comp_dic[list(te_comp_dic)[-1]]['Type_begin'])
+                            ##if there is cover between the current one and the compare dic one
+                            if tar_dic[eachid]['Type_begin'] < te_comp_dic[list(te_comp_dic)[-1]]['Type_end']:
+                                ##if current one is longer than the compared one
+                                if cur_len >= com_len:
+                                    ##remove the compared one and store the current one
+                                    te_comp_dic.pop(list(te_comp_dic)[-1])
+                                    transfer(eachid, te_comp_dic, tar_dic)
+                                else:
+                                    continue ##continue the analysis to ignore the current id
+
+                            ##if there is no cover between the current one and the compare dic one
+                            else:
+                                transfer(eachid, te_comp_dic, tar_dic)
+
+
+                ##store the te from compared dic to the te_line_dic
+                for eachid in te_comp_dic:
+                    #print('the target id count is ' + str(count))
+                    tar_te_line = te_comp_dic[eachid]['Type_nm'] + '\t' + te_comp_dic[eachid]['Type_begin'] + '\t' + te_comp_dic[eachid]['Type_end']
+                    #te_line_list.append(tar_te_line)
+
+                    te_line_dic[tar_te_line] = 1
+
+
+    ##transfer the te_line_dic to a dt because we will sort the begin of the te
+    with open (ltr_dir + '/opt_temp_domain_order.tb','w+') as opt_dm_or_dt:
+        for eachline in te_line_dic:
+            opt_dm_or_dt.write(eachline + '\n')
+
+    ##use pandas open the dt and order the dt according to the Type_begin
+    temp_dm_df = pd.read_table(ltr_dir + '/opt_temp_domain_order.tb', header=None, delimiter=r"\s+")
+    temp_dm_df.columns = ['domain_name', 'begin', 'end']
+    temp_dm_sort_fl = temp_dm_df.sort_values(by=['begin'])
+    temp_dm_sort_fl.to_csv(ltr_dir + '/opt_temp_domain_order_sort.csv', sep='\t')
+
+    ##open the sort temp file
+    domain_list = []
+    with open (ltr_dir + '/opt_temp_domain_order_sort.csv') as ipt_dm_sort:
+        for eachline in ipt_dm_sort:
+            if not re.match('.*domain_name.*',eachline):
+                col = eachline.strip().split()
+                mt = re.match('(.+)_(.+)', col[1])
+                domain_nm = mt.group(2)
+
+                if domain_nm != 'GAG':   ##because this script is for the pattern so we do not use the GAG as patterns
+                    domain_nm_loc = domain_nm
+                    domain_list.append(domain_nm_loc)
+
+    domain_str = ''.join(domain_list)
+
+    ##return a domain str: example: RTININ
+    return (domain_str)
+
+
+######################################################################
+##Step 3: use the functions to generate the domain pattern for each te
+######################################################################
+def generate_domain_pattern (input_ltr_fas,hmmscan_exe,ltr_dir):
+    ##import the input_ltr_fas from the arg in the begin of the script
+
+    ##initial a dic to store all the information about the te and domain
+    te_domain_pattern_dic = {}
+
+    ##initial a te_count to calculate the number of analyzed te
+    te_count = 0
+    for seq_record in SeqIO.parse(input_ltr_fas, "fasta"):
+
+        seqid = seq_record.id
+        te_count = te_count + 1
+        print('the number of analysis is ' + str(te_count))
+
+        ##function translate to get the pro seq for each te
+        pro_seq_six_frame_dic = translate(seq_record.seq)
+        ##function iden_domain_six_rdframe to identify domain for each reading frame
+        te_domain_six_rdframe_dic = iden_domain_six_rdframe(pro_seq_six_frame_dic, seqid,hmmscan_exe,ltr_dir)
+
+        if len(te_domain_six_rdframe_dic) != 0:
+            ##function compare_rdframe will compare_rd_frame to get the ideal te_nm
+            max_te_nm = compare_rdframe(te_domain_six_rdframe_dic,ltr_dir)
+            ##function iden_max_seq could give us the target analyzed sequence.
+            seq_out = iden_max_seq(max_te_nm)
+            ##function collect_domain will collect information from the hmm opt
+            domain_location_dic = collect_domain (ltr_dir + '/' + seq_out)
+            ##function store_domain_info will store the domain infor in a dic
+            domain_all_dic = store_domain_info(domain_location_dic,ltr_dir)
+            ##function filter_te will filter the domain infr and give us a domain string
+            domain_str = filter_te(domain_all_dic,ltr_dir)
+
+            tar_line = seqid + '\t' + domain_str
+            te_domain_pattern_dic[tar_line] = 1
+            print('the target line is ' + str(tar_line))
+
+
+
+        #updation: 3.12 REMOVE temp file
+        cmd = 'rm ' + ltr_dir + '/*.out ' +  ltr_dir + '/*.seq ' + \
+              ltr_dir + '/opt_temp_domain_order_sort.csv ' + ltr_dir + '/opt_temp_domain_order.tb ' + \
+              ltr_dir + '/opt_temp_seq_domain_loc_sort.csv ' + ltr_dir + '/opt_temp_seq_domain_loc.txt ' + \
+              ltr_dir + '/opt_temp_six_rdframe_domain_hmm.tb'
+        subprocess.call(cmd, shell=True)
+        print(cmd)
+
+
+    return (te_domain_pattern_dic)
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
